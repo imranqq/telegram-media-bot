@@ -1,5 +1,7 @@
 @echo off
 chcp 65001 >nul
+rem Без этого эмодзи и рамка прогресса в логах ломают вывод на cp1251
+set PYTHONIOENCODING=utf-8
 cd /d "%~dp0"
 
 if not exist venv (
