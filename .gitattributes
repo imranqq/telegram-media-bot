@@ -1,0 +1,6 @@
+# В репозитории — LF, чтобы Dockerfile и Python-код одинаково работали на Linux-раннере Render
+* text=auto eol=lf
+*.bat text eol=crlf
+*.png binary
+*.jpg binary
+*.webp binary

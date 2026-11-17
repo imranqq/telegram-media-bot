@@ -1,0 +1,9 @@
+.git
+.env
+.venv
+venv
+__pycache__
+*.pyc
+downloads
+cookies.txt
+README.md

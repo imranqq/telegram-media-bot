@@ -1,0 +1,29 @@
+# Render Blueprint. Держите этот файл в корне репозитория,
+# либо укажите путь к нему при создании Blueprint в Render.
+services:
+  - type: web
+    name: telegram-media-bot
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: MAX_UPLOAD_MB
+        value: "50"
+      - key: DEFAULT_VIDEO_HEIGHT
+        value: "720"
+      - key: DEFAULT_AUDIO_FORMAT
+        value: "mp3"
+      - key: MAX_PLAYLIST_ITEMS
+        value: "25"
+      - key: MAX_VIDEO_DURATION_MIN
+        value: "30"
+      - key: MAX_CONCURRENT_DOWNLOADS
+        value: "1"
+      - key: LOG_LEVEL
+        value: "INFO"

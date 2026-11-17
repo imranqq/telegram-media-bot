@@ -1,0 +1,206 @@
+# Telegram Media Bot
+
+Бот для скачивания музыки из **SoundCloud** и видео с **YouTube** по ссылке.
+
+## Что умеет
+
+| Источник | Что получите |
+| --- | --- |
+| SoundCloud трек | MP3 320 kbps **или** оригинальный файл без перекодирования |
+| SoundCloud сет / альбом | все треки: ZIP-архивом, если влезает в лимит, иначе по одному |
+| YouTube видео | MP4 (H.264 + AAC) до 1080p, со звуком в одной дорожке |
+
+Дополнительно:
+
+- живой прогресс-бар в сообщении: проценты, мегабайты, скорость, ETA;
+- очередь загрузок: несколько задач одновременно, запросы одного пользователя выполняются последовательно;
+- автоматический подбор качества под лимит файла — если 1080p не влезает, бот сам берёт 720p;
+- кнопки «720p / 480p / 360p», если файл всё же оказался больше лимита;
+- понятные тексты ошибок: приватное видео, возрастное ограничение, блокировка по региону, требование cookies;
+- обложки треков подтягиваются и отправляются вместе с аудио.
+
+## Быстрый старт (Windows)
+
+### 1. ffmpeg
+
+Без ffmpeg не будет ни склейки видео со звуком, ни MP3. Скачайте сборку с
+[gyan.dev](https://www.gyan.dev/ffmpeg/builds/) (`ffmpeg-release-essentials.zip`), распакуйте, например, в `C:\ffmpeg`,
+и укажите в `.env`:
+
+```env
+FFMPEG_LOCATION=C:\ffmpeg\bin\ffmpeg.exe
+```
+
+Либо добавьте `C:\ffmpeg\bin` в `PATH` и оставьте переменную пустой.
+
+### 2. Зависимости
+
+```powershell
+cd C:\Users\COMP_ING\projects\telegram-media-bot
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+### 3. Настройки
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Впишите в `.env` токен из [@BotFather](https://t.me/BotFather):
+
+```env
+BOT_TOKEN=123456789:AA...
+DOWNLOAD_DIR=C:\Users\COMP_ING\media-bot-tmp
+```
+
+### 4. Запуск
+
+```powershell
+.\venv\Scripts\python.exe -m bot
+```
+
+В логе появится `Бот запущен · лимит файла 50 МБ`. Откройте бота в Telegram, отправьте ссылку.
+
+## Переменные окружения
+
+| Переменная | По умолчанию | Назначение |
+| --- | --- | --- |
+| `BOT_TOKEN` | — | Токен бота, обязателен |
+| `TELEGRAM_API_BASE` | облачный API | Адрес Bot API; пусто = `https://api.telegram.org` |
+| `MAX_UPLOAD_MB` | `50` | Лимит файла; `2000` для локального Bot API |
+| `DOWNLOAD_DIR` | `/tmp/telegram_media_bot` | Временный каталог, чистится после отправки |
+| `FFMPEG_LOCATION` | из `PATH` | Путь к `ffmpeg.exe` / `ffmpeg` |
+| `COOKIES_FILE` | — | `cookies.txt` для YouTube |
+| `MAX_CONCURRENT_DOWNLOADS` | `2` | Параллельных загрузок (на free-плане Render ставьте `1`) |
+| `MAX_PLAYLIST_ITEMS` | `25` | Сколько треков брать из сета |
+| `MAX_VIDEO_DURATION_MIN` | `60` | Максимальная длительность видео в минутах |
+| `DEFAULT_VIDEO_HEIGHT` | `1080` | Потолок качества видео |
+| `DEFAULT_AUDIO_FORMAT` | `mp3` | `mp3` или `orig` |
+| `YT_PLAYER_CLIENT` | по умолчанию yt-dlp | Например `android,web_safari`, если YouTube просит подтвердить «я не робот» |
+| `PORT` | `8080` | Порт healthcheck |
+| `LOG_LEVEL` | `INFO` | `DEBUG` для разбора проблем |
+
+## Деплой на Render
+
+Проект готов к запуску как Docker-сервис.
+
+1. Запушьте папку в Git-репозиторий (файл `.env` в git не попадает — он в `.gitignore`).
+2. В Render: **New → Blueprint**, укажите репозиторий. Render прочитает `render.yaml`.
+   Если `render.yaml` лежит внутри папки проекта, а не в корне репозитория, при создании
+   Blueprint укажите путь к нему, либо разверните вручную: **New → Web Service → Docker**,
+   `Dockerfile Path` = `Dockerfile`.
+3. В переменных окружения задайте `BOT_TOKEN` (значение `sync: false` означает, что Render
+   спросит его при создании сервиса).
+4. Дождитесь сборки. В логах должно появиться `Healthcheck слушает 0.0.0.0:8080/health`.
+
+Важные особенности Render:
+
+- **Диск эфемерный.** Файлы живут в `/tmp` и удаляются сразу после отправки. Кэша между
+  деплоями нет — это сделано намеренно, чтобы не забивать диск.
+- **Free-план засыпает** после 15 минут без HTTP-трафика. Healthcheck сам по себе сервис
+  не будит: чтобы бот отвечал круглосуточно, нужен либо платный план, либо внешний пинг
+  `https://<service>.onrender.com/health` каждые 10 минут (cron-job.org, UptimeRobot).
+- **512 МБ RAM на free-плане.** Поэтому качество по умолчанию в `render.yaml` снижено до 720p,
+  одновременных загрузок — одна.
+
+## Лимит 50 МБ и локальный Bot API
+
+Облачной Bot API запрещено отдавать боту файлы больше 50 МБ — это ограничение Telegram,
+а не бота. Варианты:
+
+- **Бот сам понижает качество.** Уже реализовано: качество подбирается по оценке размера,
+  а если файл всё же больше — приходит сообщение с кнопками «720p / 480p / 360p».
+- **Свой Bot API server** (лимит 2000 МБ). Нужен VPS: соберите
+  [telegram-bot-api](https://github.com/tdlib/telegram-bot-api), запустите и укажите
+
+  ```env
+  TELEGRAM_API_BASE=http://localhost:8081
+  MAX_UPLOAD_MB=2000
+  ```
+
+  Так же поднимается `local`-режим для тестов без ограничений по размеру.
+
+## YouTube просит cookies
+
+Если в логах `Sign in to confirm you're not a bot` — YouTube не доверяет IP сервера.
+Решение: экспортировать cookies из браузера расширением *Get cookies.txt LOCALLY*, положить
+файл рядом с проектом и указать:
+
+```env
+COOKIES_FILE=C:\Users\COMP_ING\projects\telegram-media-bot\cookies.txt
+```
+
+На Render файл нужно передать как Secret File (**Environment → Secret Files**), путь будет
+`/etc/secrets/cookies.txt`. Cookies живут несколько недель, потом процедуру надо повторить.
+
+## Архитектура
+
+```
+telegram-media-bot/
+├── bot/
+│   ├── __main__.py          # python -m bot
+│   ├── main.py              # сборка приложения, polling, логирование
+│   ├── config.py            # Settings из переменных окружения
+│   ├── middlewares.py       # внедрение сервисов в хендлеры
+│   ├── web.py               # /health для Render
+│   ├── handlers/
+│   │   ├── commands.py      # /start, /help, /format
+│   │   └── media.py         # ссылка → job → отправка, кнопки формата и качества
+│   ├── keyboards/
+│   │   └── inline.py        # выбор формата звука, понижение качества
+│   ├── services/
+│   │   ├── downloader.py    # yt-dlp: анализ, выбор качества, загрузка
+│   │   ├── formats.py       # селекторы форматов yt-dlp
+│   │   ├── progress.py      # прогресс-бар и троттлинг edit_message_text
+│   │   ├── queue.py         # семафор + блокировка на пользователя
+│   │   ├── sender.py        # send_audio / send_video / ZIP
+│   │   ├── preferences.py   # формат звука пользователя
+│   │   └── pending.py       # токены для повторной загрузки в другом качестве
+│   └── utils/
+│       ├── links.py         # разбор ссылок YouTube / SoundCloud
+│       ├── format.py        # размеры, скорости, прогресс-бар
+│       ├── text.py          # тексты и перевод ошибок
+│       └── telegram.py      # безопасные edit/delete сообщений
+├── Dockerfile
+├── render.yaml
+└── requirements.txt
+```
+
+Поток обработки одной ссылки:
+
+```
+сообщение → links.parse_link → downloader.run
+   → probe (метаданные) → выбор качества под лимит
+   → yt-dlp download (progress_hooks → ProgressTracker)
+   → sender.deliver (audio / video / zip)
+   → удаление временных файлов
+```
+
+## Обновление yt-dlp
+
+YouTube меняет защиту чаще, чем выходят релизы бота. Если перестало качаться —
+обновите зависимость:
+
+```powershell
+.\venv\Scripts\python.exe -m pip install -U yt-dlp
+```
+
+На Render: **Manual Deploy → Clear build cache & deploy**.
+
+## Частые проблемы
+
+| Симптом | Причина и лечение |
+| --- | --- |
+| `ffmpeg not found` | Не установлен ffmpeg или не задан `FFMPEG_LOCATION` |
+| `Sign in to confirm you're not a bot` | Нужен `COOKIES_FILE` |
+| `Файл весит X, а лимит 50 МБ` | Так работает Bot API: выберите качество ниже или поднимите локальный сервер |
+| Бот молчит после деплоя | Free-план Render усыпил сервис — пингуйте `/health` |
+| `Не задан BOT_TOKEN` | Нет `.env` или переменная не передана в Render |
+| Скачалось 0 файлов | Ссылка приватная/удалённая, проверьте `LOG_LEVEL=DEBUG` |
+
+## Дисклеймер
+
+Бот скачивает контент по публичным ссылкам. Соблюдайте условия использования SoundCloud и
+YouTube и авторские права: используйте для личного прослушивания, а не для перепубликации.

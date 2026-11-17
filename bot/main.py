@@ -1,0 +1,123 @@
+"""Сборка и запуск приложения."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import shutil
+from logging.config import dictConfig
+from pathlib import Path
+
+from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
+from aiogram.enums import ParseMode
+
+from bot.config import Settings
+from bot.handlers import setup_routers
+from bot.middlewares import ServicesMiddleware
+from bot.services.downloader import MediaDownloader
+from bot.services.pending import PendingStore
+from bot.services.preferences import Preferences
+from bot.services.queue import DownloadQueue
+from bot.web import start_health_server
+
+log = logging.getLogger(__name__)
+
+
+def configure_logging(level: str) -> None:
+    dictConfig(
+        {
+            "version": 1,
+            "disable_existing_loggers": False,
+            "formatters": {
+                "default": {
+                    "format": "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
+                    "datefmt": "%H:%M:%S",
+                }
+            },
+            "handlers": {
+                "console": {
+                    "class": "logging.StreamHandler",
+                    "formatter": "default",
+                }
+            },
+            "root": {"handlers": ["console"], "level": level},
+            "loggers": {
+                "aiogram.event": {"level": "WARNING"},
+                "yt_dlp": {"level": "WARNING"},
+                "aiohttp.access": {"level": "WARNING"},
+            },
+        }
+    )
+
+
+def check_ffmpeg(settings: Settings) -> None:
+    """ffmpeg нужен для MP3 и склейки видео — предупреждаем сразу, а не при первой загрузке."""
+    if settings.ffmpeg_location:
+        if not Path(settings.ffmpeg_location).exists():
+            log.warning("FFMPEG_LOCATION=%s не найден по этому пути", settings.ffmpeg_location)
+        return
+    if shutil.which("ffmpeg") is None:
+        log.warning("ffmpeg не найден в PATH: MP3 и склейка видео работать не будут")
+
+
+def cleanup_download_dir(settings: Settings) -> None:
+    """Убираем недокачанные каталоги от прошлых запусков."""
+    settings.download_dir.mkdir(parents=True, exist_ok=True)
+    for path in settings.download_dir.glob("job_*"):
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+
+
+async def main() -> None:
+    settings = Settings.from_env()
+    configure_logging(settings.log_level)
+    cleanup_download_dir(settings)
+    check_ffmpeg(settings)
+
+    session = (
+        AiohttpSession(api=TelegramAPIServer.from_base(settings.api_base))
+        if settings.uses_local_api
+        else None
+    )
+    bot = Bot(
+        token=settings.bot_token,
+        session=session,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
+
+    downloader = MediaDownloader(settings)
+    dispatcher = Dispatcher()
+    middleware = ServicesMiddleware(
+        settings=settings,
+        downloader=downloader,
+        queue=DownloadQueue(settings.max_concurrent_downloads),
+        prefs=Preferences(settings.default_audio_format),
+        pending=PendingStore(),
+    )
+    dispatcher.message.middleware(middleware)
+    dispatcher.callback_query.middleware(middleware)
+    setup_routers(dispatcher)
+
+    runner = await start_health_server(settings.port)
+
+    log.info(
+        "Бот запущен · лимит файла %s МБ · ffmpeg %s · API %s",
+        settings.max_upload_mb,
+        settings.ffmpeg_location or "из PATH",
+        "локальный" if settings.uses_local_api else "облачный",
+    )
+
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        await dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())
+    finally:
+        await runner.cleanup()
+        await bot.session.close()
+        log.info("Бот остановлен")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
