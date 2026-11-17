@@ -55,6 +55,7 @@ class Settings:
     max_concurrent_downloads: int
     max_playlist_items: int
     max_video_duration: int
+    job_timeout: int
     default_audio_format: str
     default_video_height: int
     yt_player_client: str | None
@@ -92,6 +93,7 @@ class Settings:
             max_concurrent_downloads=max(1, _int("MAX_CONCURRENT_DOWNLOADS", 2)),
             max_playlist_items=max(1, _int("MAX_PLAYLIST_ITEMS", 25)),
             max_video_duration=max(60, _int("MAX_VIDEO_DURATION_MIN", 60) * 60),
+            job_timeout=max(120, _int("JOB_TIMEOUT_MIN", 30) * 60),
             default_audio_format=audio_format,
             default_video_height=max(144, _int("DEFAULT_VIDEO_HEIGHT", 1080)),
             yt_player_client=_get("YT_PLAYER_CLIENT"),

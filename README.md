@@ -82,8 +82,9 @@ DOWNLOAD_DIR=C:\Users\COMP_ING\media-bot-tmp
 | `FFMPEG_LOCATION` | из `PATH` | Путь к `ffmpeg.exe` / `ffmpeg` |
 | `COOKIES_FILE` | — | `cookies.txt` для YouTube |
 | `MAX_CONCURRENT_DOWNLOADS` | `2` | Параллельных загрузок (на free-плане Render ставьте `1`) |
-| `MAX_PLAYLIST_ITEMS` | `25` | Сколько треков брать из сета |
+| `MAX_PLAYLIST_ITEMS` | `25` | Сколько треков брать из сета (на Render — `10`) |
 | `MAX_VIDEO_DURATION_MIN` | `60` | Максимальная длительность видео в минутах |
+| `JOB_TIMEOUT_MIN` | `30` | Предохранитель: через сколько минут задача прерывается |
 | `DEFAULT_VIDEO_HEIGHT` | `1080` | Потолок качества видео |
 | `DEFAULT_AUDIO_FORMAT` | `mp3` | `mp3` или `orig` |
 | `YT_PLAYER_CLIENT` | по умолчанию yt-dlp | Например `android,web_safari`, если YouTube просит подтвердить «я не робот» |

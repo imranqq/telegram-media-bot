@@ -148,6 +148,13 @@ class MediaDownloader:
                 raise MediaDownloadError("Плейлист пуст или скрыт автором")
 
             notice: str | None = None
+            take = min(len(entries), self._settings.max_playlist_items) if is_playlist else 1
+            if is_playlist:
+                log.info(
+                    "playlist %s: %s элементов, берём %s", request.url, len(entries), take
+                )
+                if tracker is not None and hasattr(tracker, "set_playlist_total"):
+                    tracker.set_playlist_total(take)
             if is_playlist and len(entries) > self._settings.max_playlist_items:
                 notice = (
                     f"В коллекции {len(entries)} треков, качаю первые "

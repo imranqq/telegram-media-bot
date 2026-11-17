@@ -31,14 +31,22 @@ class JobProgress:
 
     def __init__(self) -> None:
         self._files: dict[str, dict[str, Any]] = {}
-        self._phase: str = "download"
+        self._phase: str = "probe"
+        self._playlist_total: int = 0
+        self._playlist_index: int = 1
         # hooks yt-dlp приходят из рабочего потока, читаем из event loop
         self._lock = threading.Lock()
 
     def update_download(self, data: dict) -> None:
-        key = str(data.get("filename") or data.get("info_dict", {}).get("id") or "unknown")
+        info = data.get("info_dict") or {}
+        key = str(data.get("filename") or info.get("id") or "unknown")
         status = data.get("status")
         with self._lock:
+            if status in {"downloading", "finished"}:
+                self._phase = "download"
+                index = info.get("playlist_index")
+                if index:
+                    self._playlist_index = int(index)
             entry = self._files.setdefault(
                 key,
                 {"total": 0, "downloaded": 0, "speed": None, "eta": None, "finished": False},
@@ -70,6 +78,20 @@ class JobProgress:
     def has_files(self) -> bool:
         with self._lock:
             return bool(self._files)
+
+    def set_playlist_total(self, total: int) -> None:
+        with self._lock:
+            self._playlist_total = max(0, int(total))
+
+    @property
+    def playlist_total(self) -> int:
+        with self._lock:
+            return self._playlist_total
+
+    @property
+    def playlist_index(self) -> int:
+        with self._lock:
+            return self._playlist_index
 
     def snapshot(self) -> tuple[int, int, float | None, int | None]:
         """(скачано, всего, скорость, eta)"""
@@ -145,12 +167,13 @@ class ProgressTracker:
     # --- рендер ---
 
     def render(self) -> str | None:
-        if not self._state.has_files():
-            return None
-
         phase = self._state.phase
+        if phase == "probe":
+            return "\n".join([f"<b>{self._header}</b>", "", "🔍 Читаю ссылку…"])
         if phase != "download":
             return "\n".join([f"<b>{self._header}</b>", "", f"⚙️ {phase.capitalize()}…"])
+        if not self._state.has_files():
+            return "\n".join([f"<b>{self._header}</b>", "", "⏳ Начинаю загрузку…"])
 
         downloaded, total, speed_bps, eta = self._state.snapshot()
         percent = (downloaded / total * 100) if total else 0.0
@@ -163,13 +186,19 @@ class ProgressTracker:
         elif total and downloaded >= total:
             parts.append("сохранение")
 
-        return "\n".join(
-            [
-                f"<b>{self._header}</b>",
-                f"{render_bar(percent)} {percent:.0f}%",
-                " · ".join(parts),
-            ]
-        )
+        lines = [f"<b>{self._header}</b>"]
+        total_tracks = self._state.playlist_total
+        if total_tracks > 1:
+            current = min(self._state.playlist_index, total_tracks)
+            lines.append(f"Трек {current} из {total_tracks}")
+        lines.append(f"{render_bar(percent)} {percent:.0f}%")
+        lines.append(" · ".join(parts))
+        return "\n".join(lines)
+
+    # --- для downloader: сколько всего треков в сете ---
+
+    def set_playlist_total(self, total: int) -> None:
+        self._state.set_playlist_total(total)
 
     async def _safe_edit(self, text: str) -> None:
         if text == self._last_text:

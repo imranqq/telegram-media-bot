@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from dataclasses import replace
 
 from aiogram import Bot, F, Router
@@ -172,14 +174,33 @@ async def run_job(
     header = build_header(request)
     tracker = ProgressTracker(bot, chat_id, status.message_id, header)
     result: DownloadResult | None = None
+    waiter: asyncio.Task[None] | None = None
+    started = time.monotonic()
 
     try:
         if queue.is_busy():
             await safe_edit(status, f"{header}\n\nОчередь · {queue.load_text()}")
+            log.info("queued user=%s url=%s load=%s", user_id, request.url, queue.load_text())
+            waiter = asyncio.create_task(
+                _queue_ticker(status, header, queue, started), name="queue-ticker"
+            )
 
         async with queue.acquire(user_id):
+            if waiter is not None:
+                waiter.cancel()
+                waiter = None
             tracker.start()
-            result = await downloader.run(request, tracker)
+            log.info("job start user=%s url=%s mode=%s", user_id, request.url, request.mode)
+            result = await asyncio.wait_for(
+                downloader.run(request, tracker), timeout=settings.job_timeout
+            )
+            log.info(
+                "job done user=%s url=%s items=%s in %.0f с",
+                user_id,
+                request.url,
+                len(result.items),
+                time.monotonic() - started,
+            )
 
         await tracker.stop()
         await bot.send_chat_action(chat_id, ChatAction.UPLOAD_DOCUMENT)
@@ -204,6 +225,16 @@ async def run_job(
             keyboard = oversize_keyboard(token, exc.height or request.max_height)
         await safe_edit(status, text, keyboard)
 
+    except asyncio.TimeoutError:
+        await tracker.stop()
+        limit_min = settings.job_timeout // 60
+        log.warning("job timeout user=%s url=%s", user_id, request.url)
+        await safe_edit(
+            status,
+            f"{header}\n\nЗадача идёт дольше {limit_min} мин, останавливаю.\n"
+            "Для большого сета возьмите ссылку на отдельный трек или повторите позже.",
+        )
+
     except MediaDownloadError as exc:
         await tracker.stop()
         await safe_edit(status, f"{header}\n\n{humanize_error(exc)}")
@@ -217,6 +248,24 @@ async def run_job(
         )
 
     finally:
+        if waiter is not None:
+            waiter.cancel()
         await tracker.stop()
         if result is not None:
             result.cleanup()
+
+
+async def _queue_ticker(
+    status: Message,
+    header: str,
+    queue: DownloadQueue,
+    started: float,
+) -> None:
+    """Пока задача ждёт слот, сообщение обновляется — иначе выглядит как зависание."""
+    while True:
+        await asyncio.sleep(5)
+        elapsed = int(time.monotonic() - started)
+        await safe_edit(
+            status,
+            f"{header}\n\nОчередь · {queue.load_text()} · ждём {elapsed} с",
+        )
