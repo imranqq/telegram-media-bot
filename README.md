@@ -92,28 +92,56 @@ DOWNLOAD_DIR=C:\Users\COMP_ING\media-bot-tmp
 
 ## Деплой на Render
 
-Проект готов к запуску как Docker-сервис. Код уже в репозитории
-[imranqq/telegram-media-bot](https://github.com/imranqq/telegram-media-bot), ветка `main`.
+Код уже в репозитории [imranqq/telegram-media-bot](https://github.com/imranqq/telegram-media-bot),
+ветка `main`. Render собирает Docker-образ по `render.yaml`: там заданы план Free, регион Frankfurt,
+healthcheck `/` и лимиты под 512 МБ RAM.
 
-1. Индекс собран: `git init`, первый коммит, remote `origin` и пуш сделаны.
-   Дальше достаточно `git add -A; git commit -m "…"; git push` — Render подхватит изменения сам.
-2. В Render: **New → Blueprint**, выберите репозиторий `telegram-media-bot`. Render прочитает `render.yaml`.
-   Если `render.yaml` лежит внутри папки проекта, а не в корне репозитория, при создании
-   Blueprint укажите путь к нему, либо разверните вручную: **New → Web Service → Docker**,
-   `Dockerfile Path` = `Dockerfile`.
-3. В переменных окружения задайте `BOT_TOKEN` (значение `sync: false` означает, что Render
-   спросит его при создании сервиса).
-4. Дождитесь сборки. В логах должно появиться `Healthcheck слушает 0.0.0.0:8080/health`.
+Создание сервиса (один раз):
 
-Важные особенности Render:
+1. Откройте <https://dashboard.render.com/blueprints> и нажмите **New Blueprint Instance**.
+2. **Connect a repository** → `telegram-media-bot`. Если репозитория нет в списке, нажмите
+   **Configure account** и дайте Render доступ к нему через GitHub App.
+3. Branch — `main`, Blueprint Path — `render.yaml`.
+4. Render покажет сервис `telegram-media-bot`: Docker, Free, Frankfurt. В поле `BOT_TOKEN`
+   вставьте токен из @BotFather (`sync: false` означает, что значение спрашивают при создании).
+5. **Apply**. Сборка занимает 5–8 минут: apt ставит ffmpeg, pip — зависимости.
+6. В логах появится `Healthcheck слушает 0.0.0.0:8080/health` и `Run polling for bot @…`.
+   Адрес сервиса — `https://<имя>-xxxx.onrender.com`, проверка — `/health`.
 
-- **Диск эфемерный.** Файлы живут в `/tmp` и удаляются сразу после отправки. Кэша между
-  деплоями нет — это сделано намеренно, чтобы не забивать диск.
-- **Free-план засыпает** после 15 минут без HTTP-трафика. Healthcheck сам по себе сервис
-  не будит: чтобы бот отвечал круглосуточно, нужен либо платный план, либо внешний пинг
-  `https://<service>.onrender.com/health` каждые 10 минут (cron-job.org, UptimeRobot).
-- **512 МБ RAM на free-плане.** Поэтому качество по умолчанию в `render.yaml` снижено до 720p,
-  одновременных загрузок — одна.
+Если Blueprint не подхватился, сервис создаётся вручную: **New → Web Service**,
+репозиторий `telegram-media-bot`, Runtime **Docker**, Dockerfile Path `Dockerfile`,
+Plan **Free**, Region **Frankfurt**, Health Check Path `/`, переменная `BOT_TOKEN`.
+
+Дальше каждый `git push` в `main` деплоится сам — в `render.yaml` стоит `autoDeploy: true`.
+
+### Бот 24/7 на free-плане
+
+Free-план усыпляет контейнер через 15 минут без HTTP-трафика, и бот перестаёт забирать
+сообщения из Telegram. В репозитории лежит `.github/workflows/keepalive.yml`: он каждые
+10 минут дёргает `/health` и держит сервис живым, без платного плана.
+
+1. Скопируйте адрес сервиса.
+2. GitHub → репозиторий → **Settings → Secrets and variables → Actions → Variables →
+   New repository variable**. Имя `RENDER_URL`, значение — адрес без слэша на конце.
+3. Проверка: **Actions → Keep-alive → Run workflow**.
+
+То же самое из терминала:
+
+```powershell
+gh variable set RENDER_URL --body "https://<service>.onrender.com"
+```
+
+Первый запрос после долгого простоя всё равно ждёт ~50 секунд: это холодный старт контейнера.
+Платный план ($7/мес) убирает сон полностью.
+
+### Что важно помнить про Render
+
+- **Диск эфемерный.** Файлы живут в `/tmp` и удаляются сразу после отправки, кэша между
+  деплоями нет.
+- **512 МБ RAM.** Поэтому качество видео в `render.yaml` снижено до 720p, одновременных
+  загрузок — одна. На аудио с SoundCloud это не влияет.
+- **Один экземпляр.** Бот работает через long polling: если запустить его одновременно локально
+  и на Render, Telegram отдаст апдейты только одному, второй получит `409 Conflict`.
 
 ## Лимит 50 МБ и локальный Bot API
 
