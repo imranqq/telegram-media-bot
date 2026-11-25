@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import shutil
 from logging.config import dictConfig
@@ -18,6 +19,7 @@ from bot.config import WEBHOOK_PATH, Settings
 from bot.handlers import setup_routers
 from bot.middlewares import ServicesMiddleware
 from bot.services.downloader import MediaDownloader
+from bot.services.keepalive import SelfPinger
 from bot.services.pending import PendingStore
 from bot.services.preferences import Preferences
 from bot.services.queue import DownloadQueue
@@ -102,6 +104,7 @@ async def main() -> None:
     setup_routers(dispatcher)
 
     runner = None
+    pinger_task: asyncio.Task[None] | None = None
 
     log.info(
         "Бот запущен · лимит файла %s МБ · ffmpeg %s · API %s",
@@ -109,6 +112,11 @@ async def main() -> None:
         settings.ffmpeg_location or "из PATH",
         "локальный" if settings.uses_local_api else "облачный",
     )
+
+    # Самопинг имеет смысл только с публичным адресом: локально сервис не засыпает
+    if settings.uses_webhook and settings.keepalive_interval > 0:
+        pinger = SelfPinger(settings.webhook_base or "", settings.keepalive_interval)
+        pinger_task = asyncio.create_task(pinger.run(), name="self-ping")
 
     try:
         if settings.uses_webhook:
@@ -140,6 +148,10 @@ async def main() -> None:
             log.info("Режим long polling")
             await dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())
     finally:
+        if pinger_task is not None:
+            pinger_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await pinger_task
         if runner is not None:
             await runner.cleanup()
         await bot.session.close()

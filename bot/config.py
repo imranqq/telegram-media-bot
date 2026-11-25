@@ -74,6 +74,7 @@ class Settings:
     log_level: str
     webhook_base: str | None
     webhook_secret: str
+    keepalive_interval: int
 
     @property
     def uses_local_api(self) -> bool:
@@ -124,4 +125,6 @@ class Settings:
             webhook_base=(_get("WEBHOOK_URL") or _get("RENDER_EXTERNAL_URL") or "").rstrip("/")
             or None,
             webhook_secret=_webhook_secret(token),
+            # 0 отключает самопинг
+            keepalive_interval=max(0, _int("KEEPALIVE_MIN", 10)) * 60,
         )

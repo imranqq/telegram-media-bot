@@ -26,6 +26,9 @@ services:
         value: "30"
       - key: JOB_TIMEOUT_MIN
         value: "45"
+      # Самопинг /health раз в 10 минут: free-план засыпает после 15 минут тишины
+      - key: KEEPALIVE_MIN
+        value: "10"
       - key: MAX_CONCURRENT_DOWNLOADS
         value: "1"
       - key: LOG_LEVEL
