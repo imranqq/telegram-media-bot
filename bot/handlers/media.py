@@ -1,29 +1,25 @@
-"""Основной сценарий: ссылка → загрузка → отправка файла."""
+"""Основной сценарий: ссылка → загрузка → отправка аудио."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
-from dataclasses import replace
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatAction
 from aiogram.types import CallbackQuery, Message
 
 from bot.config import Settings
-from bot.keyboards.inline import format_keyboard, oversize_keyboard
+from bot.keyboards.inline import format_keyboard
 from bot.services.downloader import (
-    MODE_AUDIO,
-    MODE_VIDEO,
     DownloadRequest,
     DownloadResult,
     MediaDownloadError,
     MediaDownloader,
     OversizeError,
 )
-from bot.services.formats import MAX_VIDEO_HEIGHT, label_for_audio
-from bot.services.pending import PendingStore
+from bot.services.formats import label_for_audio
 from bot.services.preferences import Preferences
 from bot.services.progress import ProgressTracker
 from bot.services.queue import DownloadQueue
@@ -40,27 +36,28 @@ router = Router(name="media")
 NO_LINK_TEXT = (
     "Ссылку не нашёл.\n\n"
     "Подойдёт:\n"
-    "• soundcloud.com/…  — трек или сет\n"
-    "• youtube.com/watch?v=…  или youtu.be/…\n\n"
-    "Формат звука можно переключить кнопкой ниже."
+    "• soundcloud.com/… — трек или сет\n"
+    "• youtube.com/watch?v=… — возьму звук и пришлю MP3\n"
+    "• open.spotify.com/track/… — найду этот трек на YouTube\n\n"
+    "Формат звука переключается кнопкой ниже."
 )
+
+SPOTIFY_KIND_TEXT = (
+    "Из Spotify понимаю только ссылки на отдельный трек:\n"
+    "open.spotify.com/track/…\n\n"
+    "Альбомы и плейлисты пока не разворачиваю."
+)
+
+PLATFORM_HEADERS: dict[Platform, str] = {
+    Platform.SOUNDCLOUD: "🎧 SoundCloud",
+    Platform.YOUTUBE: "🎧 YouTube → MP3",
+    Platform.SPOTIFY: "🎧 Spotify → поиск на YouTube",
+}
 
 
 def build_header(request: DownloadRequest) -> str:
-    if request.is_audio:
-        return f"🎧 SoundCloud · {label_for_audio(request.audio_format)}"
-    quality = f"до {request.max_height}p" if request.max_height else "лучшее в пределах лимита"
-    return f"🎬 YouTube · {quality}"
-
-
-def request_from_link(url: str, platform: Platform, prefs: Preferences, user_id: int) -> DownloadRequest:
-    is_audio = platform is Platform.SOUNDCLOUD
-    return DownloadRequest(
-        url=url,
-        platform=platform,
-        mode=MODE_AUDIO if is_audio else MODE_VIDEO,
-        audio_format=prefs.audio_format(user_id),
-    )
+    base = PLATFORM_HEADERS.get(request.platform, "🎧 Загрузка")
+    return f"{base} · {label_for_audio(request.audio_format)}"
 
 
 # --------------------------------------------------------------------- handlers
@@ -74,10 +71,10 @@ async def on_link(
     downloader: MediaDownloader,
     queue: DownloadQueue,
     prefs: Preferences,
-    pending: PendingStore,
 ) -> None:
     if message.from_user is None:
         return
+
     link = parse_link(message.text or "")
     if link is None:
         await message.answer(
@@ -87,7 +84,16 @@ async def on_link(
         )
         return
 
-    request = request_from_link(link.url, link.platform, prefs, message.from_user.id)
+    if link.platform is Platform.SPOTIFY and not link.spotify_id:
+        await message.answer(SPOTIFY_KIND_TEXT, link_preview_options=NO_PREVIEW)
+        return
+
+    request = DownloadRequest(
+        url=link.url,
+        platform=link.platform,
+        audio_format=prefs.audio_format(message.from_user.id),
+        spotify_id=link.spotify_id,
+    )
     status = await message.answer(f"{build_header(request)}\n\nГотовлю загрузку…")
     await run_job(
         bot=bot,
@@ -98,7 +104,6 @@ async def on_link(
         settings=settings,
         downloader=downloader,
         queue=queue,
-        pending=pending,
     )
 
 
@@ -117,45 +122,6 @@ async def on_format_changed(callback: CallbackQuery, prefs: Preferences) -> None
             log.debug("markup edit failed", exc_info=True)
 
 
-@router.callback_query(F.data.startswith("retry:"))
-async def on_quality_retry(
-    callback: CallbackQuery,
-    bot: Bot,
-    settings: Settings,
-    downloader: MediaDownloader,
-    queue: DownloadQueue,
-    pending: PendingStore,
-) -> None:
-    parts = (callback.data or "").split(":")
-    if len(parts) != 3 or callback.message is None:
-        await callback.answer("Кнопка устарела", show_alert=True)
-        return
-    _, token, raw_height = parts
-    if not raw_height.isdigit():
-        await callback.answer("Кнопка устарела", show_alert=True)
-        return
-
-    job = pending.pop(token)
-    if job is None or job.user_id != callback.from_user.id:
-        await callback.answer("Задача устарела, пришлите ссылку заново", show_alert=True)
-        return
-
-    await callback.answer()
-    request = replace(job.request, max_height=min(int(raw_height), MAX_VIDEO_HEIGHT))
-    status = await callback.message.answer(f"{build_header(request)}\n\nГотовлю загрузку…")
-    await run_job(
-        bot=bot,
-        chat_id=callback.message.chat.id,
-        user_id=callback.from_user.id,
-        request=request,
-        status=status,
-        settings=settings,
-        downloader=downloader,
-        queue=queue,
-        pending=pending,
-    )
-
-
 # ------------------------------------------------------------------ job runner
 
 
@@ -169,7 +135,6 @@ async def run_job(
     settings: Settings,
     downloader: MediaDownloader,
     queue: DownloadQueue,
-    pending: PendingStore,
 ) -> None:
     header = build_header(request)
     tracker = ProgressTracker(bot, chat_id, status.message_id, header)
@@ -190,7 +155,7 @@ async def run_job(
                 waiter.cancel()
                 waiter = None
             tracker.start()
-            log.info("job start user=%s url=%s mode=%s", user_id, request.url, request.mode)
+            log.info("job start user=%s url=%s", user_id, request.url)
             result = await asyncio.wait_for(
                 downloader.run(request, tracker), timeout=settings.job_timeout
             )
@@ -209,22 +174,6 @@ async def run_job(
         if result.notice:
             await bot.send_message(chat_id, result.notice)
 
-    except OversizeError as exc:
-        await tracker.stop()
-        token = pending.put(user_id, request)
-        text = (
-            f"{header}\n\n"
-            f"Файл весит {human_bytes(exc.size)}, а лимит Telegram — "
-            f"{human_bytes(exc.limit)}.\n"
-        )
-        if request.is_audio:
-            text += "Попробуйте другой формат звука."
-            keyboard = None
-        else:
-            text += "Выберите качество ниже — перекачаю только нужное."
-            keyboard = oversize_keyboard(token, exc.height or request.max_height)
-        await safe_edit(status, text, keyboard)
-
     except asyncio.TimeoutError:
         await tracker.stop()
         limit_min = settings.job_timeout // 60
@@ -234,6 +183,19 @@ async def run_job(
             f"{header}\n\nЗадача идёт дольше {limit_min} мин, останавливаю.\n"
             "Для большого сета возьмите ссылку на отдельный трек или повторите позже.",
         )
+
+    except OversizeError as exc:
+        await tracker.stop()
+        text = (
+            f"{header}\n\n"
+            f"Файл весит {human_bytes(exc.size)}, а лимит Telegram — "
+            f"{human_bytes(exc.limit)}.\n"
+        )
+        if request.audio_format == "mp3":
+            text += "Переключите формат на «Оригинал» — без перекодирования файл может быть меньше."
+        else:
+            text += "Пришлите трек покороче или попробуйте ссылку на другой источник."
+        await safe_edit(status, text)
 
     except MediaDownloadError as exc:
         await tracker.stop()

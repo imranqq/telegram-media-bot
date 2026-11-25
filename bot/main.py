@@ -20,7 +20,6 @@ from bot.handlers import setup_routers
 from bot.middlewares import ServicesMiddleware
 from bot.services.downloader import MediaDownloader
 from bot.services.keepalive import SelfPinger
-from bot.services.pending import PendingStore
 from bot.services.preferences import Preferences
 from bot.services.queue import DownloadQueue
 from bot.web import start_web_server
@@ -97,7 +96,6 @@ async def main() -> None:
         downloader=downloader,
         queue=DownloadQueue(settings.max_concurrent_downloads),
         prefs=Preferences(settings.default_audio_format),
-        pending=PendingStore(),
     )
     dispatcher.message.middleware(middleware)
     dispatcher.callback_query.middleware(middleware)

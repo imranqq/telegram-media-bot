@@ -15,14 +15,12 @@ services:
         sync: false
       - key: MAX_UPLOAD_MB
         value: "50"
-      - key: DEFAULT_VIDEO_HEIGHT
-        value: "720"
       - key: DEFAULT_AUDIO_FORMAT
         value: "mp3"
       # На free-плане (0.1 CPU) конвертация 25 треков в MP3 идёт десятки минут
       - key: MAX_PLAYLIST_ITEMS
         value: "10"
-      - key: MAX_VIDEO_DURATION_MIN
+      - key: MAX_AUDIO_DURATION_MIN
         value: "30"
       - key: JOB_TIMEOUT_MIN
         value: "45"

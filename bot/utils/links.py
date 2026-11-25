@@ -19,14 +19,21 @@ YOUTUBE_HOSTS = {
 SOUNDCLOUD_HOSTS = {
     "soundcloud.com",
     "on.soundcloud.com",
-    "soundcloud.app.goog.gl",
     "soundcloud.app.goo.gl",
 }
+SPOTIFY_HOSTS = {
+    "open.spotify.com",
+    "play.spotify.com",
+}
+
+SPOTIFY_TRACK_PATH = re.compile(r"/(?:intl-[a-z-]+/)?track/([A-Za-z0-9]+)")
+SPOTIFY_URI = re.compile(r"spotify:track:([A-Za-z0-9]+)")
 
 
 class Platform(str, Enum):
     YOUTUBE = "youtube"
     SOUNDCLOUD = "soundcloud"
+    SPOTIFY = "spotify"
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +41,7 @@ class MediaLink:
     url: str
     platform: Platform
     likely_playlist: bool
+    spotify_id: str | None = None
 
 
 def _normalize_host(host: str) -> str:
@@ -59,7 +67,20 @@ def extract_url(text: str) -> str | None:
 
 def parse_link(text: str) -> MediaLink | None:
     """Возвращает описание ссылки или None, если ссылка не поддерживается."""
-    raw = extract_url(text)
+    raw_text = text or ""
+
+    # Spotify можно прислать и внутренним URI: spotify:track:ID
+    uri = SPOTIFY_URI.search(raw_text)
+    if uri:
+        track_id = uri.group(1)
+        return MediaLink(
+            url=f"https://open.spotify.com/track/{track_id}",
+            platform=Platform.SPOTIFY,
+            likely_playlist=False,
+            spotify_id=track_id,
+        )
+
+    raw = extract_url(raw_text)
     if not raw:
         return None
 
@@ -78,5 +99,15 @@ def parse_link(text: str) -> MediaLink | None:
     if _matches(host, SOUNDCLOUD_HOSTS):
         is_playlist = "/sets/" in path or "/albums/" in path
         return MediaLink(url=raw, platform=Platform.SOUNDCLOUD, likely_playlist=is_playlist)
+
+    if _matches(host, SPOTIFY_HOSTS):
+        track = SPOTIFY_TRACK_PATH.search(parsed.path or "")
+        track_id = track.group(1) if track else None
+        return MediaLink(
+            url=raw,
+            platform=Platform.SPOTIFY,
+            likely_playlist=track_id is None,
+            spotify_id=track_id,
+        )
 
     return None

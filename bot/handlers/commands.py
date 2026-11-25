@@ -15,17 +15,18 @@ from bot.utils.telegram import NO_PREVIEW
 router = Router(name="commands")
 
 START_TEXT = (
-    "<b>Скачиваю музыку и видео по ссылке</b>\n\n"
-    "SoundCloud — трек или целый сет\n"
-    "YouTube — видео в MP4, до 1080p\n\n"
-    "Пришлите ссылку одним сообщением. Формат звука выбирается кнопкой ниже."
+    "<b>Присылаю музыку по ссылке</b>\n\n"
+    "SoundCloud — трек или целый сет, MP3 или оригинал\n"
+    "YouTube — вытащу звук и отдам MP3\n"
+    "Spotify — найду этот трек на YouTube и пришлю MP3\n\n"
+    "Кидайте ссылку одним сообщением. Формат звука — кнопкой ниже."
 )
 
 
 def build_help(settings: Settings) -> str:
     lines = [
         "<b>Как пользоваться</b>",
-        "1. Скопируйте ссылку на трек, видео или плейлист.",
+        "1. Скопируйте ссылку на трек, сет или видео.",
         "2. Отправьте её боту.",
         "3. Дождитесь файла — прогресс виден в сообщении.",
         "",
@@ -34,10 +35,15 @@ def build_help(settings: Settings) -> str:
         "/format orig — отдать исходный файл без перекодирования",
         "/help — эта справка",
         "",
+        "<b>Spotify</b>",
+        "Сам Spotify не отдаёт аудиофайлы, поэтому бот берёт название и исполнителя",
+        "и ищет трек на YouTube. Понимаю только ссылки вида /track/… —",
+        "альбомы и плейлисты пока не разворачиваю.",
+        "",
         "<b>Ограничения</b>",
         f"Размер файла: {settings.max_upload_mb} МБ",
         f"Плейлист: до {settings.max_playlist_items} треков",
-        f"Длительность видео: до {settings.max_video_duration // 60} мин",
+        f"Длительность: до {settings.max_audio_duration // 60} мин",
         f"Одновременных загрузок: {settings.max_concurrent_downloads}",
     ]
     return "\n".join(lines)
@@ -79,7 +85,7 @@ async def cmd_format(
 
     prefs.set_audio_format(user_id, argument)
     await message.answer(
-        f"Готово. SoundCloud будет приходить как <b>{AUDIO_LABELS[argument]}</b>.",
+        f"Готово. Буду присылать звук как <b>{AUDIO_LABELS[argument]}</b>.",
         reply_markup=format_keyboard(argument),
         link_preview_options=NO_PREVIEW,
     )

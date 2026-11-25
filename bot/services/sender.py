@@ -1,4 +1,4 @@
-"""Отправка скачанных файлов в Telegram."""
+"""Отправка скачанного аудио в Telegram."""
 
 from __future__ import annotations
 
@@ -14,13 +14,12 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import FSInputFile
 
 from bot.config import Settings
-from bot.services.downloader import MODE_AUDIO, MediaDownloadError, MediaItem, OversizeError
+from bot.services.downloader import MEDIA_LIMIT_HINT, MediaDownloadError, MediaItem, OversizeError
 from bot.utils.format import human_bytes, pluralize_tracks
 
 log = logging.getLogger(__name__)
 
 FORBIDDEN_CHARS = set('<>:"/\\|?*\n\r\t')
-THUMBNAIL_LIMIT = 190_000
 
 
 def safe_filename(name: str, fallback: str = "download") -> str:
@@ -37,17 +36,19 @@ async def deliver(
     settings: Settings,
     archive_name: str | None = None,
 ) -> None:
-    """Одиночный файл — как медиа, коллекция — архивом, если влезает в лимит."""
+    """Один трек — как аудио, коллекция — архивом, если влезает в лимит."""
     if not items:
         raise MediaDownloadError("Нечего отправлять")
 
     if len(items) == 1:
-        await _send_single(bot, chat_id, items[0], settings)
+        await _send_audio(bot, chat_id, items[0], settings)
         return
 
     total = sum(item.size for item in items)
     if total <= settings.max_upload_bytes:
-        archive = await asyncio.to_thread(_build_archive, items, safe_filename(archive_name or "collection"))
+        archive = await asyncio.to_thread(
+            _build_archive, items, safe_filename(archive_name or "collection")
+        )
         await bot.send_chat_action(chat_id, ChatAction.UPLOAD_DOCUMENT)
         try:
             await bot.send_document(
@@ -66,58 +67,46 @@ async def deliver(
         f"{human_bytes(settings.max_upload_bytes)}, отправляю по одному.",
     )
     for item in items:
-        await _send_single(bot, chat_id, item, settings)
+        await _send_audio(bot, chat_id, item, settings)
         await asyncio.sleep(0.4)
 
 
-async def _send_single(bot: Bot, chat_id: int, item: MediaItem, settings: Settings) -> None:
+async def _send_audio(bot: Bot, chat_id: int, item: MediaItem, settings: Settings) -> None:
     if item.size > settings.max_upload_bytes:
-        raise OversizeError(item.size, settings.max_upload_bytes, item.height)
+        raise OversizeError(item.size, settings.max_upload_bytes)
 
     document = FSInputFile(item.path, filename=_display_filename(item))
     thumbnail = FSInputFile(item.thumbnail) if item.thumbnail else None
 
     try:
-        if item.kind == MODE_AUDIO:
-            await bot.send_chat_action(chat_id, ChatAction.UPLOAD_VOICE)
-            await bot.send_audio(
-                chat_id,
-                document,
-                title=item.title[:64],
-                performer=(item.performer or "")[:64] or None,
-                duration=item.duration,
-                thumbnail=thumbnail,
-            )
-        else:
-            await bot.send_chat_action(chat_id, ChatAction.UPLOAD_VIDEO)
-            await bot.send_video(
-                chat_id,
-                document,
-                duration=item.duration,
-                width=item.width,
-                height=item.height,
-                supports_streaming=True,
-                thumbnail=thumbnail,
-            )
+        await bot.send_chat_action(chat_id, ChatAction.UPLOAD_VOICE)
+        await bot.send_audio(
+            chat_id,
+            document,
+            title=item.title[:64],
+            performer=(item.performer or "")[:64] or None,
+            duration=item.duration,
+            thumbnail=thumbnail,
+        )
     except TelegramBadRequest as exc:
         raise MediaDownloadError(_delivery_error(exc)) from exc
 
 
 def _display_filename(item: MediaItem) -> str:
-    return safe_filename(f"{item.title}.{item.extension}", fallback=f"file.{item.extension}")
+    return safe_filename(f"{item.title}.{item.extension}", fallback=f"audio.{item.extension}")
 
 
 def _delivery_error(exc: TelegramBadRequest) -> str:
     text = str(exc).lower()
     if "too big" in text or "file is too large" in text:
-        return "Telegram отказал: файл больше лимита. Выберите качество ниже."
+        return f"Telegram отказал: файл больше лимита. {MEDIA_LIMIT_HINT}"
     if "wrong file identifier" in text:
         return "Telegram не принял файл, попробуйте ссылку снова."
     return f"Telegram вернул ошибку: {exc}"
 
 
 def _build_archive(items: Sequence[MediaItem], base_name: str) -> Path:
-    """ZIP без сжатия: mp3/mp4 всё равно не сжимаются, зато быстро."""
+    """ZIP без сжатия: mp3 всё равно не сжимается, зато быстро."""
     archive = items[0].path.parent / f"{base_name}.zip"
     used: set[str] = set()
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_STORED) as bundle:
