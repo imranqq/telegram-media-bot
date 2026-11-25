@@ -14,14 +14,14 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums import ParseMode
 
-from bot.config import Settings
+from bot.config import WEBHOOK_PATH, Settings
 from bot.handlers import setup_routers
 from bot.middlewares import ServicesMiddleware
 from bot.services.downloader import MediaDownloader
 from bot.services.pending import PendingStore
 from bot.services.preferences import Preferences
 from bot.services.queue import DownloadQueue
-from bot.web import start_health_server
+from bot.web import start_web_server
 
 log = logging.getLogger(__name__)
 
@@ -101,7 +101,7 @@ async def main() -> None:
     dispatcher.callback_query.middleware(middleware)
     setup_routers(dispatcher)
 
-    runner = await start_health_server(settings.port)
+    runner = None
 
     log.info(
         "Бот запущен · лимит файла %s МБ · ffmpeg %s · API %s",
@@ -111,10 +111,37 @@ async def main() -> None:
     )
 
     try:
-        await bot.delete_webhook(drop_pending_updates=True)
-        await dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())
+        if settings.uses_webhook:
+            # Сначала сервер, потом set_webhook: к моменту первого апдейта URL уже живой
+            runner = await start_web_server(
+                settings.port,
+                bot=bot,
+                dispatcher=dispatcher,
+                webhook_path=WEBHOOK_PATH,
+                secret=settings.webhook_secret,
+            )
+            await bot.set_webhook(
+                url=settings.webhook_url,
+                secret_token=settings.webhook_secret,
+                allowed_updates=dispatcher.resolve_used_update_types(),
+                # false: апдейты, пришедшие пока контейнер спал, доедут после пробуждения
+                drop_pending_updates=False,
+            )
+            log.info("Режим webhook · %s", settings.webhook_url)
+            await asyncio.Event().wait()
+        else:
+            runner = await start_web_server(settings.port)
+            webhook = await bot.get_webhook_info()
+            if webhook.url:
+                log.warning(
+                    "У бота уже стоит webhook (%s): локальный polling будет конфликтовать с ним",
+                    webhook.url,
+                )
+            log.info("Режим long polling")
+            await dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())
     finally:
-        await runner.cleanup()
+        if runner is not None:
+            await runner.cleanup()
         await bot.session.close()
         log.info("Бот остановлен")
 

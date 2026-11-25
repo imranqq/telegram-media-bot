@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_MAX_UPLOAD_MB = 50
 CLOUD_API_BASE = "https://api.telegram.org"
+WEBHOOK_PATH = "/webhook"
 
 
 def _get(name: str) -> str | None:
@@ -31,6 +33,15 @@ def _int(name: str, default: int) -> int:
 def _path(name: str) -> Path | None:
     raw = _get(name)
     return Path(raw).expanduser() if raw else None
+
+
+def _webhook_secret(token: str) -> str:
+    """Стабильный секрет для заголовка X-Telegram-Bot-Api-Secret-Token.
+
+    Telegram присылает его с каждым апдейтом, бот сверяет — так на /webhook не может
+    постучаться кто угодно. Из токена, чтобы не заводить ещё одну переменную.
+    """
+    return hashlib.sha256(token.encode()).hexdigest()[:32]
 
 
 def load_dotenv_file() -> None:
@@ -61,10 +72,20 @@ class Settings:
     yt_player_client: str | None
     port: int
     log_level: str
+    webhook_base: str | None
+    webhook_secret: str
 
     @property
     def uses_local_api(self) -> bool:
         return self.api_base.rstrip("/") != CLOUD_API_BASE
+
+    @property
+    def uses_webhook(self) -> bool:
+        return bool(self.webhook_base)
+
+    @property
+    def webhook_url(self) -> str | None:
+        return f"{self.webhook_base}{WEBHOOK_PATH}" if self.webhook_base else None
 
     @property
     def max_upload_mb(self) -> int:
@@ -99,4 +120,8 @@ class Settings:
             yt_player_client=_get("YT_PLAYER_CLIENT"),
             port=_int("PORT", 8080),
             log_level=(_get("LOG_LEVEL") or "INFO").upper(),
+            # Render сам подставляет RENDER_EXTERNAL_URL — webhook включается без настройки
+            webhook_base=(_get("WEBHOOK_URL") or _get("RENDER_EXTERNAL_URL") or "").rstrip("/")
+            or None,
+            webhook_secret=_webhook_secret(token),
         )
